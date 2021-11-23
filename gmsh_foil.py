@@ -19,8 +19,7 @@ class GMSHFoil:
                 self.mesh_name = ntpath.basename(foil_dat_file)[:-4]
         else:
             foil = Airfoil.NACA4(naca_foil)
-            x_points = np.concatenate([np.linspace(0.0, 0.01, 100),
-                                np.linspace(0.01, 1.0, 200)[1:]])
+            x_points = np.concatenate([np.linspace(0.0, 0.01, 100),np.linspace(0.01, 1.0, 200)[1:]])
             x_points_reversed = list(reversed(x_points))[:-1]
             foil_points_x = np.array([*x_points_reversed, *x_points])
             foil_points_y = np.array([*foil.y_upper(x_points_reversed), *foil.y_lower(x_points)])
@@ -35,17 +34,21 @@ class GMSHFoil:
                                          h_f = 0.001,
                                          h_0 = 0.2,
                                          R_b = 100,
-                                         h_extrude = 1.):
+                                         h_extrude = 1.,
+                                         refine_wake_len = 0.25,
+                                         h_w = 0.01):
         """
         Create the 2D unstructured mesh for simulating the airfoil.
         
         Arguments:
           npoints_airfoil   : (400) number of points for each of the surfaces of the airfoil
           h_f               : (0.001) h-refinement size for the points of the foil
-          h_0               : (0.01)  h-refinement size for overall sizing
+          h_0               : (0.2)  h-refinement size for overall sizing
           R_b               : the radius of the outer boundary.
           h_extrude         : (1.) openfoam needs an extrusion height. The geometry plane is extruded 
                               to a unit height in order to create cells.
+          refine_wake_len   : (0.25) the length of the wake refinement line
+          h_w               : (0.01) sizing of the refinement wake line
           
         """
         
@@ -70,17 +73,24 @@ class GMSHFoil:
             if k_end > max(gmsh_airf_points):
                 k_end = min(gmsh_airf_points)
 
-            gmsh.model.occ.addLine(k_start, k_end, k)
+            _gmsh.model.occ.addLine(k_start, k_end, k)
             start_end_lines_foil.append((k_start, k_end))
             foil_curve.append(k)
 
         # create circular boundary for the boundary:
-        boundary = gmsh.model.occ.addCircle(0.5, 0.0, 0.0, R_b)
+        boundary = _gmsh.model.occ.addCircle(0.5, 0.0, 0.0, R_b)
 
         # creating a circular surface with a foil-shaped hole:
         _gmsh.model.occ.addCurveLoop([boundary], 1)
         _gmsh.model.occ.addCurveLoop(foil_curve, 2)
         _gmsh.model.occ.addPlaneSurface([1,2], 0)
+
+        # add refinement line in the airfoil wake
+        p1, p2 = _gmsh.model.occ.addPoint(1.0, 0, 0, h_w), gmsh.model.occ.addPoint(1.0 + refine_wake_len, 0, 0, h_w)
+        refine_line = _gmsh.model.occ.addLine(p1, p2)
+
+        _gmsh.model.occ.synchronize()
+        _gmsh.model.mesh.embed(1, [refine_line], 2, 0)
 
         # extrude the surface and create farfield surface
         e = _gmsh.model.occ.extrude([(2,0)], 0, 0, h_extrude, numElements=[1], recombine=True)
