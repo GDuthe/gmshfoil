@@ -10,12 +10,20 @@ pip install numpy
 ```
 
 ## Usage
+Script to create a mesh using a dat file with airfoil coordinates:
 
-Script to create a mesh with a NACA airfoil and a particular angle of attack:
+```
+python3 gmsh_foil_run.py -i your_file.dat \
+  --output-mesh-file-name 'mesh_name'\
+  --view 0
+
+```
+
+
+Script to create a mesh with a NACA airfoil:
 
 ```
 python3 gmsh_foil_run.py --foil-number-string 4812 \
-  --angle-of-attack 0.\
   --output-mesh-file-name 'NACA_4812'\
   --view 0
 
