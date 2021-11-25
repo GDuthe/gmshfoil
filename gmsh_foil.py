@@ -12,8 +12,7 @@ class GMSHFoil:
         """
         self.mesh_name = mesh_name
         if foil_dat_file is not None:
-            airfoil_coords = np.loadtxt(foil_dat_file, skiprows=1)
-            self.foil_spline = interpolate.splprep([airfoil_coords[:, 0], airfoil_coords[:, 1]], s=0.00002, k=3)
+            self.airfoil_coords = np.loadtxt(foil_dat_file, skiprows=1)
 
             if self.mesh_name is None:
                 self.mesh_name = ntpath.basename(foil_dat_file)[:-4]
@@ -21,17 +20,16 @@ class GMSHFoil:
             foil = Airfoil.NACA4(naca_foil)
             x_points = np.concatenate([np.linspace(0.0, 0.01, 100),np.linspace(0.01, 1.0, 200)[1:]])
             x_points_reversed = list(reversed(x_points))[:-1]
-            foil_points_x = np.array([*x_points_reversed, *x_points])
-            foil_points_y = np.array([*foil.y_upper(x_points_reversed), *foil.y_lower(x_points)])
-            self.foil_spline = interpolate.splprep([foil_points_x, foil_points_y], s=0.000002, k=3)
+            self.airfoil_coords = np.array([[*x_points_reversed, *x_points],
+                                            [*foil.y_upper(x_points_reversed), *foil.y_lower(x_points)]]).T
 
             if self.mesh_name is None:
                 self.mesh_name = 'naca_' + naca_foil
         self.gmsh = gmsh
         
     def create_2d_unstructured_foil_mesh(self,
-                                         npoints_airfoil = 400,
-                                         h_f = 0.001,
+                                         use_base_coords = False,
+                                         npoints_airfoil = 1500,
                                          h_0 = 0.2,
                                          R_b = 100,
                                          h_extrude = 1.,
@@ -41,8 +39,8 @@ class GMSHFoil:
         Create the 2D unstructured mesh for simulating the airfoil.
         
         Arguments:
-          npoints_airfoil   : (400) number of points for each of the surfaces of the airfoil
-          h_f               : (0.001) h-refinement size for the points of the foil
+          use_base_coords  : (False) if False a spline fitting should be used to obtain coordinates
+          npoints_airfoil   : (1500) number of points on the airfoil surface, can only be used if not using base coords
           h_0               : (0.2)  h-refinement size for overall sizing
           R_b               : the radius of the outer boundary.
           h_extrude         : (1.) openfoam needs an extrusion height. The geometry plane is extruded 
@@ -57,17 +55,20 @@ class GMSHFoil:
         _gmsh.model.add(self.mesh_name)
 
         # points for the airfoil:
-        t = np.concatenate([np.linspace(0.0, 0.4, round(npoints_airfoil/4)),
-                            np.linspace(0.4, 0.6, round(npoints_airfoil/2))[1:-1],
-                            np.linspace(0.6, 1.0, round(npoints_airfoil/4)+1)])
-        coo = np.array(interpolate.splev(t, self.foil_spline[0], der=0)).transpose()
-        gmsh_airf_points = [_gmsh.model.occ.addPoint(coo[k,0], coo[k,1], 0, h_f, k) for k in range(len(coo))]
+        if use_base_coords:
+            coo = self.airfoil_coords
+        else:
+            t = np.linspace(0.0, 1.0, npoints_airfoil)
+            foil_spline = interpolate.splprep([self.airfoil_coords[:, 0], self.airfoil_coords[:, 1]], s=0.0000002, k=3)
+            coo = np.array(interpolate.splev(t, foil_spline[0], der=0)).transpose()
+
+        gmsh_airf_points = [_gmsh.model.occ.addPoint(coo[k,0], coo[k,1], 0, 0.0, k) for k in range(len(coo))]
         n_airf_points = len(gmsh_airf_points)
 
         # create lines for airfoil:
         foil_curve = []
         start_end_lines_foil = []
-        
+
         for k in range(n_airf_points):
             k_start, k_end = k, k + 1
             if k_end > max(gmsh_airf_points):
@@ -86,9 +87,8 @@ class GMSHFoil:
         _gmsh.model.occ.addPlaneSurface([1,2], 0)
 
         # add refinement line in the airfoil wake
-        p1, p2 = _gmsh.model.occ.addPoint(1.0, 0, 0, h_w), gmsh.model.occ.addPoint(1.0 + refine_wake_len, 0, 0, h_w)
+        p1, p2 = _gmsh.model.occ.addPoint(1.05, 0, 0, h_w), gmsh.model.occ.addPoint(1.05 + refine_wake_len, 0, 0, h_w)
         refine_line = _gmsh.model.occ.addLine(p1, p2)
-
         _gmsh.model.occ.synchronize()
         _gmsh.model.mesh.embed(1, [refine_line], 2, 0)
 
@@ -107,11 +107,13 @@ class GMSHFoil:
         farfield_surface = _gmsh.model.addPhysicalGroup(2, [farfield_surface])
         _gmsh.model.setPhysicalName(2, farfield_surface, 'FARFIELD')
         internal_volume = _gmsh.model.addPhysicalGroup(3, [e[1][1]])
-        _gmsh.model.setPhysicalName(3, internal_volume, "Internal")
+        _gmsh.model.setPhysicalName(3, internal_volume, "internalField")
 
+        _gmsh.option.setNumber("Mesh.Algorithm", 6)
         _gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", h_0)
         _gmsh.option.setNumber('Mesh.MshFileVersion' , 2.10)
         _gmsh.model.mesh.generate(3)
+        _gmsh.model.mesh.optimize("Netgen")
         _gmsh.write("%s.msh"%self.mesh_name)
         
     def view(self):
